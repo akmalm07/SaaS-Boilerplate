@@ -12,7 +12,20 @@ function parseDotenv(source) {
   return values;
 }
 
-const local = parseDotenv(await readFile(resolve('.env'), 'utf8'));
+async function loadLocalEnvironment() {
+  try {
+    return await readFile(resolve('.env'), 'utf8');
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      // CI injects credentials as environment variables and intentionally does
+      // not create a local .env file.
+      return '';
+    }
+    throw error;
+  }
+}
+
+const local = parseDotenv(await loadLocalEnvironment());
 for (const [key, value] of Object.entries(local)) if (!process.env[key]) process.env[key] = value;
 const has = (...keys) => keys.every((key) => Boolean(process.env[key]));
 const results = [];
