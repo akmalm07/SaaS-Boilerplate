@@ -44,7 +44,7 @@ The interactive wizard marks an option as **(beta)** when its generated project 
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | All backend and frontend skeleton builds; PostgreSQL/Neon, MongoDB, Firestore, Firebase Storage, and Twilio Email credential preflight; Stripe credential preflight | AWS S3, Google Cloud Storage, SMTP, Resend, SendGrid; organizations/teams flow; generated Docker deployment |
 
-The CI workflow compiles a representative generated project for each backend and frontend, and it runs generator unit tests. The separate **Provider preflight** workflow is manual-only because it uses repository secrets and makes read-only calls to configured services. See [the requirements and verification checklist](REQUIREMENTS_CHECKLIST.md) for the current coverage details.
+The CI workflow compiles a representative generated project for each backend and frontend, and it runs generator unit tests. On pushes to `main`, it also runs read-only credentialed checks for configured providers—including Stripe, Firestore, and Firebase Storage. The separate **Provider preflight** workflow remains available for an on-demand run. Neither workflow runs provider checks on pull requests. See [the requirements and verification checklist](REQUIREMENTS_CHECKLIST.md) for the current coverage details.
 
 ## CI/CD learning journey
 
@@ -53,7 +53,7 @@ This project was built as a practical CI/CD learning path, not just a code gener
 1. I started by making generation deterministic: configuration is validated up front and files are written transactionally, so failed generation does not leave a half-created app behind.
 2. I added fast local feedback with TypeScript compilation and Vitest tests for validation and generator output.
 3. I moved that feedback into GitHub Actions. Every pull request and push to `main` now builds the generator, runs its tests, creates representative projects, and compiles each supported backend and frontend family.
-4. I separated credentialed integration checks from normal CI. The manual provider-preflight workflow uses GitHub Secrets, performs read-only checks, and never logs a credential or sends email, creates a customer, or charges a card.
+4. I separated credentialed integration checks from pull-request CI. Main-branch CI and the manual provider-preflight workflow use GitHub Secrets, perform read-only checks, and never log a credential or send email, create a customer, or charge a card.
 5. I packaged the Stripe webhook as a dedicated Cloud Run container under `implementations/cloud-run-typescript`. It is intentionally separate from the generator so deployment-specific concerns stay out of generated scaffolding.
 
 The next learning step is continuous deployment: connect GitHub to Cloud Run, map runtime secrets from Secret Manager, and promote only a passing build. The included container already exposes `/health` on port `8080` and has been built and health-checked locally.

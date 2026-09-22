@@ -23,7 +23,45 @@ jobs:
       - name: Check for committed secrets
         shell: bash
         run: |
-          ! rg --glob '!node_modules/**' --glob '!package-lock.json' --glob '!*.md' '(?i)(api[_-]?key|secret|password)\s*[:=]\s*["'"'][^"'"']{12,}' .
+          set +e
+          rg --ignore-case --glob '!node_modules/**' --glob '!package-lock.json' --glob '!*.md' "(api[_-]?key|secret|password)\s*[:=]\s*['\"][^'\"]{12,}" .
+          result=$?
+          set -e
+          if [ "$result" -eq 0 ]; then
+            echo "Potential credential-like value found in a tracked source file."
+            exit 1
+          fi
+          if [ "$result" -ne 1 ]; then
+            echo "Secret scan failed with ripgrep exit code $result."
+            exit "$result"
+          fi
+
+  provider-integration:
+    name: Read-only provider integration checks
+    needs: generator
+    # Live providers use repository secrets. Do not run this job for pull
+    # requests, where secrets must remain unavailable to untrusted code.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      MONGODB_DATABASE: ${{ secrets.MONGODB_DATABASE }}
+      FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+      FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+      TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+      TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_API_VERSION: 2026-06-24.dahlia
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npm run test:providers
 
   backend-skeletons:
     name: ${{ matrix.backend }} starter build
