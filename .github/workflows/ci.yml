@@ -21,20 +21,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - name: Check for committed secrets
-        shell: bash
-        run: |
-          set +e
-          rg --ignore-case --glob '!node_modules/**' --glob '!package-lock.json' --glob '!*.md' "(api[_-]?key|secret|password)\s*[:=]\s*['\"][^'\"]{12,}" .
-          result=$?
-          set -e
-          if [ "$result" -eq 0 ]; then
-            echo "Potential credential-like value found in a tracked source file."
-            exit 1
-          fi
-          if [ "$result" -ne 1 ]; then
-            echo "Secret scan failed with ripgrep exit code $result."
-            exit "$result"
-          fi
+        run: node scripts/check-committed-secrets.mjs
 
   provider-integration:
     name: Read-only provider integration checks
