@@ -1,0 +1,34 @@
+import type { GeneratorConfig, TemplateContribution } from '../core/types.js';
+
+export function pythonBackend(config: GeneratorConfig): TemplateContribution {
+  const pkg = config.projectName.replaceAll('-', '_');
+  return {
+    files: {
+      'backend/pyproject.toml': `[project]\nname = "${pkg}-api"\nversion = "0.1.0"\nrequires-python = ">=3.12"\ndependencies = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "sqlalchemy>=2.0", "psycopg[binary]>=3.2", "pyjwt>=2.10", "pwdlib[argon2]>=0.2", "pydantic[email]>=2.10", "pydantic-settings>=2.6"]\n\n[tool.pytest.ini_options]\npythonpath = ["."]\n`,
+      'backend/app/config.py':
+        'from pydantic_settings import BaseSettings, SettingsConfigDict\n\nclass Settings(BaseSettings):\n    database_url: str\n    session_secret: str\n    jwt_issuer: str\n    jwt_audience: str\n    frontend_url: str = "http://localhost:5173"\n    model_config = SettingsConfigDict(env_file=".env", extra="ignore")\n\nsettings = Settings()\n',
+      'backend/app/db.py':
+        'from sqlalchemy import create_engine\nfrom sqlalchemy.orm import DeclarativeBase, sessionmaker\nfrom .config import settings\n\nengine = create_engine(settings.database_url, pool_pre_ping=True, pool_size=5, max_overflow=0)\nSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)\nclass Base(DeclarativeBase): pass\ndef get_db():\n    db = SessionLocal()\n    try: yield db\n    finally: db.close()\n',
+      'backend/app/models.py':
+        'from sqlalchemy import String\nfrom sqlalchemy.orm import Mapped, mapped_column\nfrom .db import Base\nclass User(Base):\n    __tablename__ = "users"\n    id: Mapped[str] = mapped_column(String(64), primary_key=True)\n    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)\n    name: Mapped[str] = mapped_column(String(200), default="")\n    password_hash: Mapped[str] = mapped_column(String(255))\n',
+      'backend/app/schemas.py':
+        'from pydantic import BaseModel, EmailStr, Field\nclass Register(BaseModel): email: EmailStr; password: str = Field(min_length=12); name: str = ""\nclass Login(BaseModel): email: EmailStr; password: str\nclass UserOut(BaseModel): id: str; email: EmailStr; name: str\n',
+      'backend/app/auth.py':
+        'from datetime import UTC, datetime, timedelta\nimport jwt\nfrom fastapi import HTTPException, Request\nfrom pwdlib import PasswordHash\nfrom .config import settings\npassword_hash = PasswordHash.recommended()\ndef hash_password(value: str) -> str: return password_hash.hash(value)\ndef verify_password(value: str, hashed: str) -> bool: return password_hash.verify(value, hashed)\ndef issue(user_id: str) -> str: return jwt.encode({"sub": user_id, "iss": settings.jwt_issuer, "aud": settings.jwt_audience, "exp": datetime.now(UTC) + timedelta(hours=24)}, settings.session_secret, algorithm="HS256")\ndef subject(request: Request) -> str:\n    token = request.cookies.get("session")\n    if not token: raise HTTPException(401, "Authentication required")\n    try: return str(jwt.decode(token, settings.session_secret, algorithms=["HS256"], issuer=settings.jwt_issuer, audience=settings.jwt_audience)["sub"])\n    except jwt.PyJWTError: raise HTTPException(401, "Authentication required")\n',
+      'backend/app/routers/auth.py':
+        'from uuid import uuid4\nfrom fastapi import APIRouter, Depends, HTTPException, Response\nfrom sqlalchemy import select\nfrom sqlalchemy.orm import Session\nfrom ..auth import hash_password, issue, verify_password\nfrom ..db import get_db\nfrom ..models import User\nfrom ..schemas import Login, Register, UserOut\nrouter = APIRouter(prefix="/api/v1/auth", tags=["auth"])\ndef dto(user: User) -> UserOut: return UserOut(id=user.id,email=user.email,name=user.name)\n@router.post("/register", status_code=201)\ndef register(body: Register, response: Response, db: Session = Depends(get_db)):\n    if db.scalar(select(User).where(User.email == body.email)): raise HTTPException(409, "Email already registered")\n    user=User(id=str(uuid4()),email=str(body.email).lower(),name=body.name,password_hash=hash_password(body.password)); db.add(user); db.commit(); response.set_cookie("session",issue(user.id),httponly=True,samesite="lax",secure=False); return {"user":dto(user)}\n@router.post("/login")\ndef login(body: Login, response: Response, db: Session = Depends(get_db)):\n    user=db.scalar(select(User).where(User.email == str(body.email).lower()))\n    if not user or not verify_password(body.password,user.password_hash): raise HTTPException(401,"Invalid credentials")\n    response.set_cookie("session",issue(user.id),httponly=True,samesite="lax",secure=False); return {"user":dto(user)}\n@router.post("/logout",status_code=204)\ndef logout(response: Response): response.delete_cookie("session")\n',
+      'backend/app/routers/users.py':
+        'from fastapi import APIRouter, Depends, HTTPException, Request\nfrom sqlalchemy.orm import Session\nfrom ..auth import subject\nfrom ..db import get_db\nfrom ..models import User\nfrom ..schemas import UserOut\nrouter=APIRouter(prefix="/api/v1/users",tags=["users"])\n@router.get("/me")\ndef me(request: Request, db: Session=Depends(get_db)) -> UserOut:\n    user=db.get(User,subject(request))\n    if not user: raise HTTPException(404,"User not found")\n    return UserOut(id=user.id,email=user.email,name=user.name)\n',
+      'backend/app/main.py':
+        'from fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\nfrom .config import settings\nfrom .db import Base, engine\nfrom .routers import auth, users\nBase.metadata.create_all(engine)\napp=FastAPI(title="Composable SaaS API")\napp.add_middleware(CORSMiddleware,allow_origins=[settings.frontend_url],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])\napp.include_router(auth.router); app.include_router(users.router)\n@app.get("/api/v1/health")\ndef health(): return {"status":"ok"}\n',
+      'backend/app/routers/__init__.py': '',
+      'backend/Dockerfile':
+        'FROM python:3.14-slim\nWORKDIR /app\nCOPY pyproject.toml .\nRUN pip install --no-cache-dir .\nCOPY app ./app\nENV PORT=8080\nCMD ["sh","-c","uvicorn app.main:app --host 0.0.0.0 --port $PORT"]\n',
+      'scripts/deploy-cloud-run-python.sh':
+        '#!/usr/bin/env bash\nset -euo pipefail\n: "${PROJECT_ID:?}" "${SERVICE:?}" "${REGION:?}" "${JWT_ISSUER:?}" "${JWT_AUDIENCE:?}"\ngcloud run deploy "$SERVICE" --source backend --region "$REGION" --set-env-vars "JWT_ISSUER=$JWT_ISSUER,JWT_AUDIENCE=$JWT_AUDIENCE" --set-secrets "SESSION_SECRET=session-secret:latest,DATABASE_URL=database-url:latest"\n',
+    },
+    readmeSections: [
+      '## Python API\n\nFastAPI + SQLAlchemy + psycopg provides a stateless, Cloud Run-ready API. PyJWT verifies algorithm, issuer, audience, expiry, and signature.',
+    ],
+  };
+}

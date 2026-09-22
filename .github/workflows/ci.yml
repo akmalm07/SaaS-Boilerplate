@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run build
+      - run: npm test
+      - name: Check for committed secrets
+        shell: bash
+        run: |
+          ! rg --glob '!node_modules/**' --glob '!package-lock.json' --glob '!*.md' '(?i)(api[_-]?key|secret|password)\s*[:=]\s*["'"'][^"'"']{12,}' .
+
+  backend-skeletons:
+    name: ${{ matrix.backend }} starter build
+    needs: generator
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: typescript
+            database: postgres
+            storage: local
+            email: smtp
+            build: npm install --no-audit --no-fund && npm run build && npm test
+          - backend: python
+            database: mongodb
+            storage: aws-s3
+            email: resend
+            build: python -m pip install . && python -m compileall -q app
+          - backend: go
+            database: firestore
+            storage: gcs
+            email: twilio
+            build: go mod tidy && go build ./cmd/api
+          - backend: java
+            database: neon
+            storage: firebase-storage
+            email: sendgrid
+            build: mvn --batch-mode --no-transfer-progress package -DskipTests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21', cache: maven }
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.24.x' }
+      - run: npm ci
+      - run: npm run build
+      - name: Generate selected skeleton
+        working-directory: ${{ runner.temp }}
+        run: node "$GITHUB_WORKSPACE/dist/cli.js" generated-${{ matrix.backend }} --backend ${{ matrix.backend }} --frontend react --database ${{ matrix.database }} --storage ${{ matrix.storage }} --email ${{ matrix.email }} --billing --organizations
+      - name: Build generated backend
+        working-directory: ${{ runner.temp }}/generated-${{ matrix.backend }}/backend
+        run: ${{ matrix.build }}
+      - name: Build minimal React client
+        working-directory: ${{ runner.temp }}/generated-${{ matrix.backend }}/frontend
+        run: npm install --no-audit --no-fund && npm run build && npm test
+
+  frontend-skeletons:
+    name: ${{ matrix.frontend }} starter build
+    needs: generator
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frontend: angular
+            build: npm install --no-audit --no-fund && npm run build
+          - frontend: react-native
+            build: npm install --no-audit --no-fund && npm run typecheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - name: Generate frontend skeleton
+        working-directory: ${{ runner.temp }}
+        run: node "$GITHUB_WORKSPACE/dist/cli.js" generated-${{ matrix.frontend }} --backend typescript --frontend ${{ matrix.frontend }} --database postgres --storage local --email smtp
+      - name: Build generated frontend
+        working-directory: ${{ runner.temp }}/generated-${{ matrix.frontend }}/frontend
+        run: ${{ matrix.build }}

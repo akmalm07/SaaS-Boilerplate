@@ -1,0 +1,35 @@
+{
+  "name": "create-composable-saas",
+  "version": "0.1.0",
+  "description": "Composable SaaS boilerplate generator",
+  "type": "module",
+  "bin": {
+    "create-saas": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:providers": "node scripts/provider-preflight.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "firebase-admin": "^13.6.0",
+    "commander": "^14.0.0",
+    "mongodb": "^7.0.0",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "prettier": "^3.9.8",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

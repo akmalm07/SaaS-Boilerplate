@@ -1,0 +1,23 @@
+# Deploy this concrete implementation only. It is intentionally outside the
+# generator templates so generated projects never inherit deployment values.
+substitutions:
+  _REGION: us-central1
+  _SERVICE: saas-stripe-webhook
+  _STRIPE_SECRET_NAME: stripe-secret-key
+  _STRIPE_WEBHOOK_SECRET_NAME: stripe-webhook-secret
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      [
+        build,
+        --tag,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE:$COMMIT_SHA',
+        .,
+      ]
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE:$COMMIT_SHA'
+
+# In Cloud Run's GitHub/Cloud Build setup, configure the deployment command to
+# use this image and inject the two named Secret Manager secrets. No secret
+# value belongs in this repository or in this build configuration.

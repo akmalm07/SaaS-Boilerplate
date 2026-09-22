@@ -1,0 +1,20 @@
+{
+  "name": "cloud-run-stripe-webhook-implementation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "fastify": "^5.6.1",
+    "stripe": "^18.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
