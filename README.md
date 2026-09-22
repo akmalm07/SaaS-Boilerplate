@@ -40,9 +40,9 @@ After generation, copy the generated `.env.example` to `.env`, provide only the 
 
 The interactive wizard marks an option as **(beta)** when its generated project builds in CI but its live provider or full product behavior has not yet been tested with a real service account. A beta label is transparency, not a claim that the option is absent.
 
-| Verified now                                                                                                                                                        | Marked beta in the wizard                                                                                                        |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| All backend and frontend skeleton builds; PostgreSQL/Neon, MongoDB, Firestore, Firebase Storage, and Twilio Email credential preflight; Stripe credential preflight | AWS S3, Google Cloud Storage, SMTP, Resend, SendGrid; Stripe billing flow; organizations/teams flow; generated Docker deployment |
+| Verified now                                                                                                                                                        | Marked beta in the wizard                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| All backend and frontend skeleton builds; PostgreSQL/Neon, MongoDB, Firestore, Firebase Storage, and Twilio Email credential preflight; Stripe credential preflight | AWS S3, Google Cloud Storage, SMTP, Resend, SendGrid; organizations/teams flow; generated Docker deployment |
 
 The CI workflow compiles a representative generated project for each backend and frontend, and it runs generator unit tests. The separate **Provider preflight** workflow is manual-only because it uses repository secrets and makes read-only calls to configured services. See [the requirements and verification checklist](REQUIREMENTS_CHECKLIST.md) for the current coverage details.
 

@@ -54,7 +54,7 @@ async function promptConfig(projectName: string): Promise<GeneratorConfig> {
     database: await ask('Choose your database', 'database', databases),
     storage: await ask('Choose your file storage', 'storage', storages),
     email: await ask('Choose your email provider', 'email', emails),
-    billing: await yesNo('Include Stripe billing? (beta)'),
+    billing: await yesNo('Include Stripe billing?'),
     organizations: await yesNo('Include organizations/teams? (beta)'),
     docker: await yesNo('Include Docker configuration? (beta)'),
   });
