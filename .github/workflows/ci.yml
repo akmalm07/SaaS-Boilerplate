@@ -51,7 +51,7 @@ jobs:
       - run: npm run test:providers
 
   backend-skeletons:
-    name: ${{ matrix.backend }} starter build
+    name: ${{ matrix.label }} starter build
     needs: generator
     runs-on: ubuntu-latest
     strategy:
@@ -59,21 +59,31 @@ jobs:
       matrix:
         include:
           - backend: typescript
+            label: typescript
             database: postgres
             storage: local
             email: smtp
             build: npm install --no-audit --no-fund && npm run build && npm test
           - backend: python
+            label: python
             database: mongodb
             storage: aws-s3
             email: resend
             build: python -m pip install . && python -m compileall -q app
           - backend: go
+            label: go-firestore
             database: firestore
             storage: gcs
             email: twilio
             build: go mod tidy && go build ./cmd/api
+          - backend: go
+            label: go-neon
+            database: neon
+            storage: local
+            email: twilio
+            build: go mod tidy && go build ./cmd/api
           - backend: java
+            label: java
             database: neon
             storage: firebase-storage
             email: sendgrid
@@ -92,12 +102,12 @@ jobs:
       - run: npm run build
       - name: Generate selected skeleton
         working-directory: ${{ runner.temp }}
-        run: node "$GITHUB_WORKSPACE/dist/cli.js" generated-${{ matrix.backend }} --backend ${{ matrix.backend }} --frontend react --database ${{ matrix.database }} --storage ${{ matrix.storage }} --email ${{ matrix.email }} --billing --organizations
+        run: node "$GITHUB_WORKSPACE/dist/cli.js" generated-${{ matrix.label }} --backend ${{ matrix.backend }} --frontend react --database ${{ matrix.database }} --storage ${{ matrix.storage }} --email ${{ matrix.email }} --billing --organizations
       - name: Build generated backend
-        working-directory: ${{ runner.temp }}/generated-${{ matrix.backend }}/backend
+        working-directory: ${{ runner.temp }}/generated-${{ matrix.label }}/backend
         run: ${{ matrix.build }}
       - name: Build minimal React client
-        working-directory: ${{ runner.temp }}/generated-${{ matrix.backend }}/frontend
+        working-directory: ${{ runner.temp }}/generated-${{ matrix.label }}/frontend
         run: npm install --no-audit --no-fund && npm run build && npm test
 
   frontend-skeletons:

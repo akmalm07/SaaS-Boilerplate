@@ -53,6 +53,21 @@ describe('generator integration', () => {
     expect(repository).toContain('interface UserRepository');
     expect(repository).toContain('PostgresUserRepository');
   });
+  it('generates a PostgreSQL repository for Go + Neon instead of Firestore', async () => {
+    const path = await generate({ backend: 'go', database: 'neon', storage: 'local' });
+    const main = await readFile(join(path, 'backend/cmd/api/main.go'), 'utf8');
+    const repository = await readFile(
+      join(path, 'backend/internal/database/postgresdb/user_repository.go'),
+      'utf8',
+    );
+    const environment = await readFile(join(path, '.env.example'), 'utf8');
+
+    expect(main).toContain('pgxpool.New');
+    expect(main).not.toContain('firestore.NewClient');
+    expect(repository).toContain('github.com/jackc/pgx/v5');
+    expect(environment).toContain('DATABASE_URL_UNPOOLED');
+    expect(environment).not.toContain('FIREBASE_PROJECT_ID');
+  });
   it('keeps generated TypeScript routes compatible with the OpenAPI source of truth', async () => {
     const path = await generate();
     const contract = await readFile(join(path, 'shared/openapi.yaml'), 'utf8');
