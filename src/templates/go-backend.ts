@@ -3,7 +3,9 @@ import type { GeneratorConfig, TemplateContribution } from '../core/types.js';
 const MODULE = '${MODULE}';
 const moduleName = MODULE;
 const render = (source: string, config: GeneratorConfig) =>
-  source.replaceAll(moduleName, `${config.projectName}/backend`);
+  source
+    .replaceAll(moduleName, `${config.projectName}/backend`)
+    .replaceAll('{{BILLING_ENABLED}}', String(config.billing));
 
 const main = `package main
 import (
@@ -15,16 +17,17 @@ func main() {
  cfg,err:=config.Load(); if err!=nil { log.Fatal(err) }; ctx:=context.Background()
  db,err:=firestore.NewClient(ctx,cfg.FirebaseProjectID); if err!=nil { log.Fatal("connect Firestore: ",err) }; defer db.Close()
  cloud,err:=cloudstorage.NewClient(ctx); if err!=nil { log.Fatal("connect GCS: ",err) }; defer cloud.Close()
- api:=httpapi.NewServer(firestoredb.NewUserRepository(db),gcs.NewStorage(cloud,cfg.GCPStorageBucket),auth.NewSessionManager(cfg.SessionSecret,cfg.JWTIssuer,cfg.JWTAudience))
+ api:=httpapi.NewServer(firestoredb.NewUserRepository(db),gcs.NewStorage(cloud,cfg.GCPStorageBucket),auth.NewSessionManager(cfg.SessionSecret,cfg.JWTIssuer,cfg.JWTAudience),cfg.StripeWebhookSecret,{{BILLING_ENABLED}})
  slog.Info("API listening","address",cfg.ListenAddress); log.Fatal(http.ListenAndServe(cfg.ListenAddress,httpapi.CORS(cfg.FrontendURL,api.Routes())))
 }
 `;
 
 const configFile = `package config
-import ("fmt"; "os")
-type Config struct { ListenAddress, FrontendURL, FirebaseProjectID, GCPStorageBucket, SessionSecret, JWTIssuer, JWTAudience string }
-func Load() (Config,error) { c:=Config{ListenAddress:":"+value("PORT","3000"),FrontendURL:value("FRONTEND_URL","http://localhost:5173"),FirebaseProjectID:os.Getenv("FIREBASE_PROJECT_ID"),GCPStorageBucket:os.Getenv("GCP_STORAGE_BUCKET"),SessionSecret:os.Getenv("SESSION_SECRET"),JWTIssuer:os.Getenv("JWT_ISSUER"),JWTAudience:os.Getenv("JWT_AUDIENCE")}; for k,v:=range map[string]string{"FIREBASE_PROJECT_ID":c.FirebaseProjectID,"GCP_STORAGE_BUCKET":c.GCPStorageBucket,"SESSION_SECRET":c.SessionSecret,"JWT_ISSUER":c.JWTIssuer,"JWT_AUDIENCE":c.JWTAudience} { if v=="" { return Config{},fmt.Errorf("missing required environment variable: %s",k) } }; return c,nil }
+import ("fmt"; "os"; "strings")
+type Config struct { ListenAddress, FrontendURL, FirebaseProjectID, GCPStorageBucket, SessionSecret, JWTIssuer, JWTAudience, StripeWebhookSecret string }
+func Load() (Config,error) { c:=Config{ListenAddress:listenAddress(value("PORT","3000")),FrontendURL:value("FRONTEND_URL","http://localhost:5173"),FirebaseProjectID:os.Getenv("FIREBASE_PROJECT_ID"),GCPStorageBucket:os.Getenv("GCP_STORAGE_BUCKET"),SessionSecret:os.Getenv("SESSION_SECRET"),JWTIssuer:os.Getenv("JWT_ISSUER"),JWTAudience:os.Getenv("JWT_AUDIENCE"),StripeWebhookSecret:os.Getenv("STRIPE_WEBHOOK_SECRET")}; for k,v:=range map[string]string{"FIREBASE_PROJECT_ID":c.FirebaseProjectID,"GCP_STORAGE_BUCKET":c.GCPStorageBucket,"SESSION_SECRET":c.SessionSecret,"JWT_ISSUER":c.JWTIssuer,"JWT_AUDIENCE":c.JWTAudience} { if v=="" { return Config{},fmt.Errorf("missing required environment variable: %s",k) } }; return c,nil }
 func value(k,fallback string) string { if v:=os.Getenv(k);v!="" { return v };return fallback }
+func listenAddress(value string) string { if strings.HasPrefix(value,":"){return value};return ":"+value }
 `;
 
 const domain = `package domain
@@ -61,9 +64,9 @@ func(s *SessionManager)Clear(w http.ResponseWriter){http.SetCookie(w,&http.Cooki
 
 const server = `package httpapi
 import("net/http";"${MODULE}/internal/auth";"${MODULE}/internal/database/firestoredb";"${MODULE}/internal/storage/gcs")
-type Server struct{users *firestoredb.UserRepository;files *gcs.Storage;sessions *auth.SessionManager}
-func NewServer(users *firestoredb.UserRepository,files *gcs.Storage,sessions *auth.SessionManager)*Server{return &Server{users:users,files:files,sessions:sessions}}
-func(s *Server)Routes()http.Handler{mux:=http.NewServeMux();mux.HandleFunc("GET /api/v1/health",s.health);mux.HandleFunc("POST /api/v1/auth/register",s.register);mux.HandleFunc("POST /api/v1/auth/login",s.login);mux.HandleFunc("POST /api/v1/auth/logout",s.logout);mux.HandleFunc("GET /api/v1/users/me",s.me);return mux}
+type Server struct{users *firestoredb.UserRepository;files *gcs.Storage;sessions *auth.SessionManager;billing *BillingWebhook}
+func NewServer(users *firestoredb.UserRepository,files *gcs.Storage,sessions *auth.SessionManager,webhookSecret string,billingEnabled bool)*Server{server:=&Server{users:users,files:files,sessions:sessions};if billingEnabled{server.billing=NewBillingWebhook(webhookSecret)};return server}
+func(s *Server)Routes()http.Handler{mux:=http.NewServeMux();mux.HandleFunc("GET /api/v1/health",s.health);mux.HandleFunc("POST /api/v1/auth/register",s.register);mux.HandleFunc("POST /api/v1/auth/login",s.login);mux.HandleFunc("POST /api/v1/auth/logout",s.logout);mux.HandleFunc("GET /api/v1/users/me",s.me);if s.billing!=nil{mux.HandleFunc("POST /api/v1/billing/webhook",s.billing.Handle)};return mux}
 func(s *Server)health(w http.ResponseWriter,_ *http.Request){respond(w,200,map[string]string{"status":"ok"})}
 `;
 
@@ -126,6 +129,8 @@ func main() {
 	api := httpapi.NewServer(
 		postgresdb.NewUserRepository(pool),
 		auth.NewSessionManager(cfg.SessionSecret, cfg.JWTIssuer, cfg.JWTAudience),
+		cfg.StripeWebhookSecret,
+		{{BILLING_ENABLED}},
 	)
 
 	slog.Info("API listening", "address", cfg.ListenAddress)
@@ -138,6 +143,7 @@ const postgresConfig = `package config
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -147,16 +153,18 @@ type Config struct {
 	SessionSecret string
 	JWTIssuer     string
 	JWTAudience   string
+	StripeWebhookSecret string
 }
 
 func Load() (Config, error) {
 	config := Config{
-		ListenAddress: value("PORT", ":3000"),
+		ListenAddress: listenAddress(value("PORT", "3000")),
 		FrontendURL:   value("FRONTEND_URL", "http://localhost:5173"),
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
 		SessionSecret: os.Getenv("SESSION_SECRET"),
 		JWTIssuer:     os.Getenv("JWT_ISSUER"),
 		JWTAudience:   os.Getenv("JWT_AUDIENCE"),
+		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
 	}
 
 	for key, value := range map[string]string{
@@ -178,6 +186,13 @@ func value(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func listenAddress(value string) string {
+	if strings.HasPrefix(value, ":") {
+		return value
+	}
+	return ":" + value
 }
 `;
 
@@ -290,10 +305,15 @@ import (
 type Server struct {
 	users    *postgresdb.UserRepository
 	sessions *auth.SessionManager
+	billing  *BillingWebhook
 }
 
-func NewServer(users *postgresdb.UserRepository, sessions *auth.SessionManager) *Server {
-	return &Server{users: users, sessions: sessions}
+func NewServer(users *postgresdb.UserRepository, sessions *auth.SessionManager, webhookSecret string, billingEnabled bool) *Server {
+	server := &Server{users: users, sessions: sessions}
+	if billingEnabled {
+		server.billing = NewBillingWebhook(webhookSecret)
+	}
+	return server
 }
 
 func (server *Server) Routes() http.Handler {
@@ -303,6 +323,9 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", server.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", server.logout)
 	mux.HandleFunc("GET /api/v1/users/me", server.me)
+	if server.billing != nil {
+		mux.HandleFunc("POST /api/v1/billing/webhook", server.billing.Handle)
+	}
 	return mux
 }
 
@@ -418,6 +441,88 @@ func (server *Server) me(writer http.ResponseWriter, request *http.Request) {
 }
 `;
 
+const billingWebhook =
+  `package httpapi
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// BillingWebhook verifies Stripe's raw-body signature before accepting an event.
+// Persist the event ID with a unique constraint before adding entitlement logic:
+// Stripe can redeliver the same event.
+type BillingWebhook struct{ secret []byte }
+
+func NewBillingWebhook(secret string) *BillingWebhook { return &BillingWebhook{secret: []byte(secret)} }
+
+func (webhook *BillingWebhook) Handle(writer http.ResponseWriter, request *http.Request) {
+	if len(webhook.secret) == 0 {
+		http.Error(writer, "Stripe webhook is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, 1<<20))
+	if err != nil {
+		http.Error(writer, "invalid webhook body", http.StatusBadRequest)
+		return
+	}
+	if !validStripeSignature(request.Header.Get("Stripe-Signature"), body, webhook.secret, time.Now()) {
+		http.Error(writer, "invalid Stripe signature", http.StatusBadRequest)
+		return
+	}
+
+	var event struct {
+		ID   string ` +
+  '`json:"id"`' +
+  `
+		Type string ` +
+  '`json:"type"`' +
+  `
+	}
+	if json.Unmarshal(body, &event) != nil || event.ID == "" || event.Type == "" {
+		http.Error(writer, "invalid Stripe event", http.StatusBadRequest)
+		return
+	}
+
+	// TODO: record event.ID transactionally before applying subscription changes.
+	// Handle checkout.session.completed and customer.subscription.* here.
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func validStripeSignature(header string, body, secret []byte, now time.Time) bool {
+	var timestamp string
+	var signatures []string
+	for _, part := range strings.Split(header, ",") {
+		key, value, found := strings.Cut(strings.TrimSpace(part), "=")
+		if !found { continue }
+		switch key {
+		case "t": timestamp = value
+		case "v1": signatures = append(signatures, value)
+		}
+	}
+	seconds, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil || len(signatures) == 0 || now.Sub(time.Unix(seconds, 0)).Abs() > 5*time.Minute { return false }
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	expected := mac.Sum(nil)
+	for _, signature := range signatures {
+		provided, err := hex.DecodeString(signature)
+		if err == nil && subtle.ConstantTimeCompare(expected, provided) == 1 { return true }
+	}
+	return false
+}
+`;
+
 function goPostgresBackend(config: GeneratorConfig): TemplateContribution {
   const file = (value: string) => render(value, config);
   return {
@@ -442,12 +547,13 @@ require (
       'backend/internal/httpapi/auth_routes.go': file(postgresAuthRoutes),
       'backend/internal/httpapi/user_routes.go': postgresUserRoutes,
       'backend/internal/httpapi/cors.go': cors,
+      'backend/internal/httpapi/billing_webhook.go': billingWebhook,
       'backend/migrations/001_initial.sql':
         "CREATE TABLE IF NOT EXISTS users (\n  id TEXT PRIMARY KEY,\n  email TEXT NOT NULL UNIQUE,\n  name TEXT NOT NULL DEFAULT '',\n  password_hash TEXT NOT NULL,\n  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\n",
       'backend/Dockerfile':
         'FROM golang:1.24-alpine AS build\nWORKDIR /src\nCOPY go.mod ./\nRUN go mod download\nCOPY . .\nRUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /api ./cmd/api\nFROM gcr.io/distroless/static-debian12\nCOPY --from=build /api /api\nENV PORT=8080\nUSER nonroot:nonroot\nENTRYPOINT ["/api"]\n',
       'backend/README.md':
-        '# Go PostgreSQL API\n\nRun `go mod tidy`, apply `migrations/001_initial.sql` using the direct Neon connection, then run `go run ./cmd/api`. The API uses the pooled `DATABASE_URL` for request traffic.\n',
+        '# Go PostgreSQL API\n\nThe generator runs `go mod tidy` and commits the resulting `go.sum`. Apply `migrations/001_initial.sql` using the direct Neon connection, then run `go run ./cmd/api`. The API uses the pooled `DATABASE_URL` for request traffic.\n',
     },
     readmeSections: [
       '## Go with PostgreSQL or Neon\n\nThe Go API uses `pgxpool` with the selected `DATABASE_URL`. For Neon, use the pooled connection URL at runtime and `DATABASE_URL_UNPOOLED` only for migrations.',
@@ -475,6 +581,7 @@ export function goBackend(config: GeneratorConfig): TemplateContribution {
       'backend/internal/httpapi/auth_routes.go': file(authRoutes),
       'backend/internal/httpapi/user_routes.go': userRoutes,
       'backend/internal/httpapi/cors.go': cors,
+      'backend/internal/httpapi/billing_webhook.go': billingWebhook,
       'backend/Dockerfile':
         'FROM golang:1.22-alpine AS build\nWORKDIR /src\nCOPY go.mod ./\nRUN go mod download\nCOPY . .\nRUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /api ./cmd/api\nFROM gcr.io/distroless/static-debian12\nCOPY --from=build /api /api\nENV PORT=8080\nUSER nonroot:nonroot\nENTRYPOINT ["/api"]\n',
       'scripts/deploy-cloud-run.ps1':
@@ -482,7 +589,7 @@ export function goBackend(config: GeneratorConfig): TemplateContribution {
       'scripts/deploy-cloud-run.sh':
         '#!/usr/bin/env bash\nset -euo pipefail\n: "${PROJECT_ID:?}" "${SERVICE:?}" "${REGION:?}" "${GCP_STORAGE_BUCKET:?}" "${JWT_ISSUER:?}" "${JWT_AUDIENCE:?}"\nSESSION_SECRET_NAME="${SESSION_SECRET_NAME:-session-secret}"\ngcloud config set project "$PROJECT_ID"\ngcloud run deploy "$SERVICE" --source backend --region "$REGION" --service-account "$SERVICE@$PROJECT_ID.iam.gserviceaccount.com" --set-env-vars "FIREBASE_PROJECT_ID=$PROJECT_ID,GCP_STORAGE_BUCKET=$GCP_STORAGE_BUCKET,JWT_ISSUER=$JWT_ISSUER,JWT_AUDIENCE=$JWT_AUDIENCE" --set-secrets "SESSION_SECRET=$SESSION_SECRET_NAME:latest"\n',
       'backend/README.md':
-        '# Go API\n\nRun `go mod tidy` then `go run ./cmd/api`. `internal/` separates config, domain, Firestore access, storage, auth, and routes.\n',
+        '# Go API\n\nThe generator runs `go mod tidy` and commits the resulting `go.sum`; run `go run ./cmd/api` to start. `internal/` separates config, domain, Firestore access, storage, auth, and routes.\n',
     },
     readmeSections: [
       '## Go API\n\nThe Go API uses focused `internal/` packages: handlers do not contain persistence code and provider SDKs are isolated behind repositories/adapters.',

@@ -72,15 +72,20 @@ program
   .option('--billing')
   .option('--organizations')
   .option('--docker')
-  .option('--install', 'Reserved for package install post-generation')
   .action(async (projectName, options) => {
     try {
+      // Feature flags are configuration too. Previously `--billing`,
+      // `--organizations`, and `--docker` incorrectly opened the interactive
+      // wizard, where their command-line choice could be replaced.
       const supplied = [
         options.backend,
         options.frontend,
         options.database,
         options.storage,
         options.email,
+        options.billing,
+        options.organizations,
+        options.docker,
       ].some(Boolean);
       const config = supplied
         ? configFromOptions(projectName, options)

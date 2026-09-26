@@ -39,7 +39,7 @@ paths:
     get:
       operationId: listFiles
       security: [{ sessionCookie: [] }]
-      responses: { '200': { description: Files, content: { application/json: { schema: { type: object, required: [files], properties: { files: { type: array, items: { $ref: '#/components/schemas/File' } } } } } } }
+      responses: { '200': { description: Files, content: { application/json: { schema: { type: object, required: [files], properties: { files: { type: array, items: { $ref: '#/components/schemas/File' } } } } } } } }
     post:
       operationId: createFile
       security: [{ sessionCookie: [] }]

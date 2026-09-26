@@ -37,21 +37,18 @@ export interface GeneratorConfig {
   billing: boolean;
   organizations: boolean;
   docker: boolean;
-  install: boolean;
 }
 
 export interface EnvironmentVariable {
   key: string;
   description: string;
   required: boolean;
-  secret?: boolean;
   value?: string;
 }
 
 export interface TemplateContribution {
   files?: Record<string, string>;
   dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
   env?: EnvironmentVariable[];
   readmeSections?: string[];
 }
@@ -59,8 +56,6 @@ export interface TemplateContribution {
 export interface GeneratorModule {
   id: string;
   kind: 'frontend' | 'backend' | 'database' | 'storage' | 'email' | 'feature' | 'deployment';
-  dependencies?: string[];
-  validate?: (config: GeneratorConfig) => string[];
   contribute: (config: GeneratorConfig) => TemplateContribution;
 }
 
@@ -74,5 +69,4 @@ export const defaults: GeneratorConfig = {
   billing: false,
   organizations: false,
   docker: false,
-  install: false,
 };

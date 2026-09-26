@@ -1,6 +1,5 @@
 import type { GeneratorConfig, TemplateContribution } from '../core/types.js';
-
-const json = (value: unknown) => JSON.stringify(value, null, 2) + '\n';
+import { json } from '../core/serialize.js';
 
 export function angularFrontend(config: GeneratorConfig): TemplateContribution {
   return {

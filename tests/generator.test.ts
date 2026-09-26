@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateProject } from '../src/core/generate.js';
 import { defaults, type GeneratorConfig } from '../src/core/types.js';
 let directory = '';
+const run = promisify(execFile);
 afterEach(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
@@ -67,6 +70,25 @@ describe('generator integration', () => {
     expect(repository).toContain('github.com/jackc/pgx/v5');
     expect(environment).toContain('DATABASE_URL_UNPOOLED');
     expect(environment).not.toContain('FIREBASE_PROJECT_ID');
+  });
+  it('formats Go output and adds a signed Stripe webhook starter only when billing is selected', async () => {
+    const path = await generate({ backend: 'go', database: 'neon', billing: true });
+    const webhookPath = join(path, 'backend/internal/httpapi/billing_webhook.go');
+    const webhook = await readFile(webhookPath, 'utf8');
+    const server = await readFile(join(path, 'backend/internal/httpapi/server.go'), 'utf8');
+    const manifest = JSON.parse(await readFile(join(path, 'generator.manifest.json'), 'utf8'));
+
+    expect(webhook).toContain('Stripe-Signature');
+    expect(webhook).toContain('subtle.ConstantTimeCompare');
+    expect(server).toContain('POST /api/v1/billing/webhook');
+    expect(manifest.dependencies).toEqual({});
+    await expect(stat(join(path, 'backend/go.sum'))).resolves.toBeDefined();
+    await expect(run('gofmt', ['-d', webhookPath])).resolves.toMatchObject({ stdout: '' });
+    await expect(
+      run('go', ['test', './...'], { cwd: join(path, 'backend') }),
+    ).resolves.toMatchObject({
+      stderr: '',
+    });
   });
   it('keeps generated TypeScript routes compatible with the OpenAPI source of truth', async () => {
     const path = await generate();

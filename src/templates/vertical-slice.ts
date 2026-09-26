@@ -1,6 +1,5 @@
 import type { GeneratorConfig, TemplateContribution } from '../core/types.js';
-
-const json = (value: unknown) => JSON.stringify(value, null, 2) + '\n';
+import { json } from '../core/serialize.js';
 
 function backendPackage(config: GeneratorConfig): string {
   return json({
@@ -45,7 +44,6 @@ const domain = `export type Role = 'owner' | 'admin' | 'member';
 export type User = { id: string; email: string; name: string; passwordHash: string };
 export type PublicUser = Pick<User, 'id' | 'email' | 'name'>;
 export type StoredFile = { id: string; userId: string; name: string; size: number; createdAt: string; path: string };
-export const publicUser = (user: User): PublicUser => ({ id: user.id, email: user.email, name: user.name });
 `;
 
 const repositories = `import { Pool } from 'pg';
@@ -119,72 +117,81 @@ const app = `import { FormEvent, useEffect, useState } from 'react'; import { ap
 `;
 const frontendTest = `import { afterEach, describe, expect, it, vi } from 'vitest'; import { api } from './client'; afterEach(() => vi.unstubAllGlobals()); describe('API client', () => { it('uses cookie credentials for protected requests', async () => { const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'u1', email: 'person@example.test', name: 'Person' }), { status: 200 })); vi.stubGlobal('fetch', fetch); await expect(api.me()).resolves.toMatchObject({ id: 'u1' }); expect(fetch.mock.calls[0][1]).toMatchObject({ credentials: 'include' }); }); it('surfaces API error messages', async () => { vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'Authentication required.' }), { status: 401 }))); await expect(api.me()).rejects.toThrow('Authentication required.'); }); });\n`;
 
-export function completeVerticalSlice(config: GeneratorConfig): TemplateContribution {
+function typescriptBackendFiles(config: GeneratorConfig): Record<string, string> {
   const neon = config.database === 'neon';
   return {
-    files: {
-      'backend/package.json': backendPackage(config),
-      'backend/tsconfig.json': json({
-        compilerOptions: {
-          target: 'ES2022',
-          module: 'NodeNext',
-          moduleResolution: 'NodeNext',
-          strict: true,
-          skipLibCheck: true,
-        },
-        include: ['src', 'test'],
-      }),
-      'backend/src/config/settings.ts': configSource,
-      'backend/src/domain/models.ts': domain,
-      'backend/src/repositories/user-repository.ts': repositories,
-      'backend/src/providers/storage.ts': storage,
-      'backend/src/services/auth-service.ts': authService,
-      'backend/src/middleware/auth.ts': authMiddleware,
-      'backend/src/routes/routes.ts': routes,
-      'backend/src/server.ts': server,
-      'backend/migrations/001_initial.sql': migration,
-      'backend/test/auth-service.test.ts': backendTest,
-      'backend/Dockerfile':
-        'FROM node:22-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nENV NODE_ENV=production\nCMD ["npm", "run", "start"]\n',
-      ...(neon
-        ? {
-            'backend/neon.ts':
-              "// Neon uses the pooled DATABASE_URL supplied by managed secrets. The pg Pool is created once per process and reused across requests.\nexport const neonDeployment = { connection: 'pooled DATABASE_URL', migrations: 'migrations/001_initial.sql' } as const;\n",
-            'backend/neon-function.json': '{ "runtime": "nodejs22" }\n',
-          }
-        : {}),
-      'frontend/package.json': frontendPackage(config),
-      'frontend/tsconfig.json': json({
-        compilerOptions: {
-          target: 'ES2022',
-          lib: ['ES2022', 'DOM', 'DOM.Iterable'],
-          strict: true,
-          module: 'ESNext',
-          moduleResolution: 'Bundler',
-          noEmit: true,
-          jsx: 'react-jsx',
-          skipLibCheck: true,
-        },
-        include: ['src'],
-      }),
-      'frontend/index.html':
-        '<div id="root"></div><script type="module" src="/src/main.tsx"></script>\n',
-      'frontend/src/main.tsx':
-        "import { createRoot } from 'react-dom/client'; import App from './App'; import './styles.css'; createRoot(document.getElementById('root')!).render(<App />);\n",
-      'frontend/src/App.tsx': app,
-      'frontend/src/api/client.ts': client,
-      'frontend/src/api/client.test.ts': frontendTest,
-      'frontend/src/vite-env.d.ts': '/// <reference types="vite/client" />\n',
-      'frontend/src/styles.css':
-        '@tailwind base; @tailwind components; @tailwind utilities;\n@layer components { .page { @apply mx-auto mt-16 max-w-2xl p-4; } .card { @apply rounded-lg border border-slate-200 bg-white p-8 shadow-sm; } form { @apply grid gap-4; } label { @apply grid gap-1; } input { @apply rounded border border-slate-300 p-2; } button { @apply rounded bg-slate-900 px-3 py-2 text-white; } }\n',
-      'frontend/tailwind.config.js':
-        "export default { content: ['./index.html', './src/**/*.{ts,tsx}'], theme: { extend: {} }, plugins: [] };\n",
-      'frontend/postcss.config.js':
-        'export default { plugins: { tailwindcss: {}, autoprefixer: {} } };\n',
-    },
+    'backend/package.json': backendPackage(config),
+    'backend/tsconfig.json': json({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'NodeNext',
+        moduleResolution: 'NodeNext',
+        strict: true,
+        skipLibCheck: true,
+      },
+      include: ['src', 'test'],
+    }),
+    'backend/src/config/settings.ts': configSource,
+    'backend/src/domain/models.ts': domain,
+    'backend/src/repositories/user-repository.ts': repositories,
+    'backend/src/providers/storage.ts': storage,
+    'backend/src/services/auth-service.ts': authService,
+    'backend/src/middleware/auth.ts': authMiddleware,
+    'backend/src/routes/routes.ts': routes,
+    'backend/src/server.ts': server,
+    'backend/migrations/001_initial.sql': migration,
+    'backend/test/auth-service.test.ts': backendTest,
+    'backend/Dockerfile':
+      'FROM node:22-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nENV NODE_ENV=production\nCMD ["npm", "run", "start"]\n',
+    ...(neon
+      ? {
+          'backend/neon.ts':
+            "// Neon uses the pooled DATABASE_URL supplied by managed secrets. The pg Pool is created once per process and reused across requests.\nexport const neonDeployment = { connection: 'pooled DATABASE_URL', migrations: 'migrations/001_initial.sql' } as const;\n",
+          'backend/neon-function.json': '{ "runtime": "nodejs22" }\n',
+        }
+      : {}),
+  };
+}
+
+function reactFrontendFiles(config: GeneratorConfig): Record<string, string> {
+  return {
+    'frontend/package.json': frontendPackage(config),
+    'frontend/tsconfig.json': json({
+      compilerOptions: {
+        target: 'ES2022',
+        lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+        strict: true,
+        module: 'ESNext',
+        moduleResolution: 'Bundler',
+        noEmit: true,
+        jsx: 'react-jsx',
+        skipLibCheck: true,
+      },
+      include: ['src'],
+    }),
+    'frontend/index.html':
+      '<div id="root"></div><script type="module" src="/src/main.tsx"></script>\n',
+    'frontend/src/main.tsx':
+      "import { createRoot } from 'react-dom/client'; import App from './App'; import './styles.css'; createRoot(document.getElementById('root')!).render(<App />);\n",
+    'frontend/src/App.tsx': app,
+    'frontend/src/api/client.ts': client,
+    'frontend/src/api/client.test.ts': frontendTest,
+    'frontend/src/vite-env.d.ts': '/// <reference types="vite/client" />\n',
+    'frontend/src/styles.css':
+      '@tailwind base; @tailwind components; @tailwind utilities;\n@layer components { .page { @apply mx-auto mt-16 max-w-2xl p-4; } .card { @apply rounded-lg border border-slate-200 bg-white p-8 shadow-sm; } form { @apply grid gap-4; } label { @apply grid gap-1; } input { @apply rounded border border-slate-300 p-2; } button { @apply rounded bg-slate-900 px-3 py-2 text-white; } }\n',
+    'frontend/tailwind.config.js':
+      "export default { content: ['./index.html', './src/**/*.{ts,tsx}'], theme: { extend: {} }, plugins: [] };\n",
+    'frontend/postcss.config.js':
+      'export default { plugins: { tailwindcss: {}, autoprefixer: {} } };\n',
+  };
+}
+
+export function typescriptBackend(config: GeneratorConfig): TemplateContribution {
+  return {
+    files: typescriptBackendFiles(config),
     readmeSections: [
       `## Local development\n\nCopy \.env.example to \.env. Apply \`backend/migrations/001_initial.sql\` to PostgreSQL, then run \`npm install && npm run dev\` in \`backend\` and \`npm install && npm run dev\` in \`frontend\`. Local storage is development-only; it must be replaced by a cloud storage provider before serverless production deployment.`,
-      ...(neon
+      ...(config.database === 'neon'
         ? [
             "## Neon\n\nUse Neon's pooled \`DATABASE_URL\` as a managed secret. Apply the included PostgreSQL migration with your migration runner; the generated API creates one reusable pool per process and reused across requests.",
           ]
@@ -192,21 +199,6 @@ export function completeVerticalSlice(config: GeneratorConfig): TemplateContribu
     ],
   };
 }
-
-export function typescriptBackend(config: GeneratorConfig): TemplateContribution {
-  const all = completeVerticalSlice(config);
-  return {
-    files: Object.fromEntries(
-      Object.entries(all.files ?? {}).filter(([path]) => path.startsWith('backend/')),
-    ),
-    readmeSections: all.readmeSections,
-  };
-}
 export function reactFrontend(config: GeneratorConfig): TemplateContribution {
-  const all = completeVerticalSlice(config);
-  return {
-    files: Object.fromEntries(
-      Object.entries(all.files ?? {}).filter(([path]) => path.startsWith('frontend/')),
-    ),
-  };
+  return { files: reactFrontendFiles(config) };
 }

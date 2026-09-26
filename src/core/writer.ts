@@ -13,6 +13,7 @@ export async function assertAbsent(path: string): Promise<void> {
 export async function writeTransaction(
   destination: string,
   files: Record<string, string>,
+  afterWrite?: (staging: string) => Promise<void>,
 ): Promise<void> {
   const staging = `${destination}.creating-${process.pid}-${Date.now()}`;
   await assertAbsent(destination);
@@ -23,6 +24,7 @@ export async function writeTransaction(
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, contents, 'utf8');
     }
+    await afterWrite?.(staging);
     await rename(staging, destination);
   } catch (error) {
     await rm(staging, { recursive: true, force: true });

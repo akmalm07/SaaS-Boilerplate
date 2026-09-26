@@ -50,7 +50,6 @@ const modules: Record<string, GeneratorModule> = {
       {
         key: 'DATABASE_URL',
         required: true,
-        secret: true,
         description: 'PostgreSQL connection string',
       },
     ],
@@ -63,13 +62,11 @@ const modules: Record<string, GeneratorModule> = {
       {
         key: 'DATABASE_URL',
         required: true,
-        secret: true,
         description: 'Neon pooled PostgreSQL connection string',
       },
       {
         key: 'DATABASE_URL_UNPOOLED',
         required: true,
-        secret: true,
         description: 'Neon direct connection string for migrations',
       },
     ],
@@ -79,7 +76,7 @@ const modules: Record<string, GeneratorModule> = {
     'database:mongodb',
     'database',
     [
-      { key: 'MONGODB_URI', required: true, secret: true, description: 'MongoDB connection URI' },
+      { key: 'MONGODB_URI', required: true, description: 'MongoDB connection URI' },
       { key: 'MONGODB_DATABASE', required: true, description: 'Database name' },
     ],
     'Use the official MongoDB driver and keep the generated repository interface as the application boundary. Official guide: https://www.mongodb.com/docs/drivers/node/current/quick-start/ .',
@@ -94,13 +91,11 @@ const modules: Record<string, GeneratorModule> = {
         {
           key: 'FIREBASE_CLIENT_EMAIL',
           required: false,
-          secret: true,
           description: 'Optional Firebase service account email; ADC is preferred',
         },
         {
           key: 'FIREBASE_PRIVATE_KEY',
           required: false,
-          secret: true,
           description: 'Optional Firebase service account private key; ADC is preferred',
         },
       ],
@@ -138,13 +133,11 @@ const modules: Record<string, GeneratorModule> = {
       {
         key: 'AWS_ACCESS_KEY_ID',
         required: false,
-        secret: true,
         description: 'Optional AWS key; prefer IAM roles',
       },
       {
         key: 'AWS_SECRET_ACCESS_KEY',
         required: false,
-        secret: true,
         description: 'Optional AWS secret; prefer IAM roles',
       },
     ],
@@ -184,8 +177,8 @@ const modules: Record<string, GeneratorModule> = {
     [
       { key: 'SMTP_HOST', required: true, description: 'SMTP host' },
       { key: 'SMTP_PORT', required: true, value: '587', description: 'SMTP port' },
-      { key: 'SMTP_USER', required: false, secret: true, description: 'SMTP account' },
-      { key: 'SMTP_PASSWORD', required: false, secret: true, description: 'SMTP password' },
+      { key: 'SMTP_USER', required: false, description: 'SMTP account' },
+      { key: 'SMTP_PASSWORD', required: false, description: 'SMTP password' },
       { key: 'EMAIL_FROM', required: true, description: 'Sender address' },
     ],
     'Use Nodemailer `createTransport` with STARTTLS on port 587 or implicit TLS on port 465. Official guide: https://nodemailer.com/smtp .',
@@ -197,13 +190,11 @@ const modules: Record<string, GeneratorModule> = {
       {
         key: 'TWILIO_ACCOUNT_SID',
         required: true,
-        secret: true,
         description: 'Twilio Account SID for the Twilio Email API',
       },
       {
         key: 'TWILIO_AUTH_TOKEN',
         required: true,
-        secret: true,
         description: 'Twilio Auth Token for the Twilio Email API',
       },
       {
@@ -223,7 +214,7 @@ const modules: Record<string, GeneratorModule> = {
     'email:resend',
     'email',
     [
-      { key: 'RESEND_API_KEY', required: true, secret: true, description: 'Resend API key' },
+      { key: 'RESEND_API_KEY', required: true, description: 'Resend API key' },
       { key: 'EMAIL_FROM', required: true, description: 'Verified sender address' },
     ],
     'Use the Resend Node SDK `emails.send` API with a verified sender. Official guide: https://resend.com/nodejs .',
@@ -233,7 +224,7 @@ const modules: Record<string, GeneratorModule> = {
     'email:sendgrid',
     'email',
     [
-      { key: 'SENDGRID_API_KEY', required: true, secret: true, description: 'SendGrid API key' },
+      { key: 'SENDGRID_API_KEY', required: true, description: 'SendGrid API key' },
       { key: 'EMAIL_FROM', required: true, description: 'Verified sender address' },
     ],
     'Use the SendGrid Node mail helper with a verified sender. Official guide: https://docs.sendgrid.com/for-developers/sending-email/quickstart-nodejs .',
@@ -243,11 +234,10 @@ const modules: Record<string, GeneratorModule> = {
     'stripe',
     'feature',
     [
-      { key: 'STRIPE_SECRET_KEY', required: true, secret: true, description: 'Stripe secret key' },
+      { key: 'STRIPE_SECRET_KEY', required: true, description: 'Stripe secret key' },
       {
         key: 'STRIPE_WEBHOOK_SECRET',
         required: true,
-        secret: true,
         description: 'Stripe webhook signing secret',
       },
     ],

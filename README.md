@@ -54,7 +54,7 @@ This project was built as a practical CI/CD learning path, not just a code gener
 2. I added fast local feedback with TypeScript compilation and Vitest tests for validation and generator output.
 3. I moved that feedback into GitHub Actions. Every pull request and push to `main` now builds the generator, runs its tests, creates representative projects, and compiles each supported backend and frontend family.
 4. I separated credentialed integration checks from pull-request CI. Main-branch CI and the manual provider-preflight workflow use GitHub Secrets, perform read-only checks, and never log a credential or send email, create a customer, or charge a card.
-5. I packaged the Stripe webhook as a dedicated Cloud Run container under `implementations/cloud-run-typescript`. It is intentionally separate from the generator so deployment-specific concerns stay out of generated scaffolding.
+5. Go projects generated with Stripe billing include a raw-body, signature-verified webhook starter at `POST /api/v1/billing/webhook`. It deliberately leaves event persistence and entitlement updates as marked TODOs, because Stripe delivery is at-least-once and production handling needs an application-specific idempotency store. The Cloud Run example under `implementations/cloud-run-typescript` remains available as a deployment reference.
 
 The next learning step is continuous deployment: connect GitHub to Cloud Run, map runtime secrets from Secret Manager, and promote only a passing build. The included container already exposes `/health` on port `8080` and has been built and health-checked locally.
 
