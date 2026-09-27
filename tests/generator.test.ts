@@ -82,6 +82,14 @@ describe('generator integration', () => {
     expect(contract).toContain('/billing/webhook');
     expect(contract).toContain('/organizations');
     expect(compose).toContain('frontend:');
+    expect(compose).toContain('env_file: .env');
+    expect(compose).toContain(
+      'DATABASE_URL: ${DATABASE_URL:?set the Neon pooled DATABASE_URL in .env}',
+    );
+    expect(compose).not.toContain('postgres:16-alpine');
+    expect(compose).toContain('GOOGLE_APPLICATION_CREDENTIALS_FILE');
+    expect(await readFile(join(path, '.gitignore'), 'utf8')).toContain('secrets/');
+    await expect(stat(join(path, '.dockerignore'))).resolves.toBeDefined();
     await expect(stat(join(path, 'backend/package-lock.json'))).resolves.toBeDefined();
     await expect(stat(join(path, 'frontend/package-lock.json'))).resolves.toBeDefined();
   });

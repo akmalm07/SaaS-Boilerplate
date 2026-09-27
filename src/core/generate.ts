@@ -6,6 +6,7 @@ import type { EnvironmentVariable, GeneratorConfig, TemplateContribution } from 
 import { validateConfig } from './validate.js';
 import { formatGeneratedFiles, formatGeneratedProject } from './format.js';
 import { writeTransaction } from './writer.js';
+import { gitignore } from '../templates/deployment.js';
 
 const baseEnvironment: EnvironmentVariable[] = [
   {
@@ -95,7 +96,7 @@ export async function generateProject(
   const selectedModules = resolveModules(config);
   const contributions = selectedModules.map((module) => module.contribute(config));
   const files: Record<string, string> = {
-    '.gitignore': '.env\nnode_modules\ndist\nuploads\n',
+    '.gitignore': gitignore(config),
     'saas.config.json': json(config),
     'shared/openapi.yaml': openApi(config),
   };
