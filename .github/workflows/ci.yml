@@ -12,6 +12,8 @@ permissions:
 jobs:
   generator:
     runs-on: ubuntu-latest
+    # Lockfile generation and Go module preparation are intentional generator work.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

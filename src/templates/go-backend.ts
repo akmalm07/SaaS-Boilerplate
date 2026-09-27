@@ -441,6 +441,81 @@ func (server *Server) me(writer http.ResponseWriter, request *http.Request) {
 }
 `;
 
+const neonMain = `package main
+
+import (
+	"log"
+	"log/slog"
+	"net/http"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+
+	"${MODULE}/internal/auth"
+	"${MODULE}/internal/config"
+	"${MODULE}/internal/database/neondb"
+	"${MODULE}/internal/httpapi"
+)
+
+func main() {
+	cfg, err := config.Load()
+	if err != nil { log.Fatal(err) }
+	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{})
+	if err != nil { log.Fatal("connect Neon: ", err) }
+
+	api := httpapi.NewServer(neondb.NewUserRepository(db), auth.NewSessionManager(cfg.SessionSecret, cfg.JWTIssuer, cfg.JWTAudience), cfg.StripeWebhookSecret, {{BILLING_ENABLED}})
+	slog.Info("API listening", "address", cfg.ListenAddress)
+	log.Fatal(http.ListenAndServe(cfg.ListenAddress, httpapi.CORS(cfg.FrontendURL, api.Routes())))
+}
+`;
+
+const neonRepository =
+  `package neondb
+
+import (
+	"context"
+	"errors"
+
+	"gorm.io/gorm"
+
+	"${MODULE}/internal/domain"
+)
+
+var ErrNotFound = errors.New("user not found")
+
+type userModel struct {
+	ID string ` +
+  '`gorm:"primaryKey"`' +
+  `
+	Email string ` +
+  '`gorm:"uniqueIndex"`' +
+  `
+	Name string
+	PasswordHash string
+}
+
+func (userModel) TableName() string { return "users" }
+
+type UserRepository struct { db *gorm.DB }
+func NewUserRepository(db *gorm.DB) *UserRepository { return &UserRepository{db: db} }
+
+func (repository *UserRepository) Create(ctx context.Context, user domain.User) error {
+	return repository.db.WithContext(ctx).Create(userModel{ID: user.ID, Email: user.Email, Name: user.Name, PasswordHash: user.PasswordHash}).Error
+}
+
+func (repository *UserRepository) FindByID(ctx context.Context, id string) (domain.User, error) { return repository.find(ctx, "id = ?", id) }
+func (repository *UserRepository) FindByEmail(ctx context.Context, email string) (domain.User, error) { return repository.find(ctx, "email = ?", email) }
+func (repository *UserRepository) find(ctx context.Context, query string, value string) (domain.User, error) {
+	var model userModel
+	err := repository.db.WithContext(ctx).Where(query, value).First(&model).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) { return domain.User{}, ErrNotFound }
+	return domain.User{ID: model.ID, Email: model.Email, Name: model.Name, PasswordHash: model.PasswordHash}, err
+}
+`;
+
+const neonServer = postgresServer.replaceAll('postgresdb', 'neondb');
+const neonAuthRoutes = postgresAuthRoutes.replaceAll('postgresdb', 'neondb');
+
 const billingWebhook =
   `package httpapi
 
@@ -561,8 +636,48 @@ require (
   };
 }
 
+function goNeonBackend(config: GeneratorConfig): TemplateContribution {
+  const file = (value: string) => render(value, config);
+  return {
+    files: {
+      'backend/go.mod': `module ${config.projectName}/backend
+
+go 1.24
+
+require (
+	gorm.io/driver/postgres v1.5.11
+	gorm.io/gorm v1.31.1
+	github.com/golang-jwt/jwt/v5 v5.2.1
+	golang.org/x/crypto v0.31.0
+)
+`,
+      'backend/cmd/api/main.go': file(neonMain),
+      'backend/internal/config/config.go': postgresConfig,
+      'backend/internal/domain/user.go': postgresDomain,
+      'backend/internal/database/neondb/user_repository.go': file(neonRepository),
+      'backend/internal/auth/session.go': session,
+      'backend/internal/httpapi/server.go': file(neonServer),
+      'backend/internal/httpapi/response.go': response,
+      'backend/internal/httpapi/auth_routes.go': file(neonAuthRoutes),
+      'backend/internal/httpapi/user_routes.go': postgresUserRoutes,
+      'backend/internal/httpapi/cors.go': cors,
+      'backend/internal/httpapi/billing_webhook.go': billingWebhook,
+      'backend/migrations/001_initial.sql':
+        "CREATE TABLE IF NOT EXISTS users (\n  id TEXT PRIMARY KEY,\n  email TEXT NOT NULL UNIQUE,\n  name TEXT NOT NULL DEFAULT '',\n  password_hash TEXT NOT NULL,\n  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\n",
+      'backend/Dockerfile':
+        'FROM golang:1.24-alpine AS build\nWORKDIR /src\nCOPY go.mod ./\nRUN go mod download\nCOPY . .\nRUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /api ./cmd/api\nFROM gcr.io/distroless/static-debian12\nCOPY --from=build /api /api\nENV PORT=8080\nUSER nonroot:nonroot\nENTRYPOINT ["/api"]\n',
+      'backend/README.md':
+        '# Go Neon API\n\nThe generator uses GORM with Neon’s PostgreSQL-compatible driver and commits the resulting `go.sum`. Apply `migrations/001_initial.sql` using the direct Neon connection, then run `go run ./cmd/api`.\n',
+    },
+    readmeSections: [
+      '## Go with Neon\n\nThe Go API uses GORM with the Neon-compatible PostgreSQL driver. Use the pooled `DATABASE_URL` at runtime and `DATABASE_URL_UNPOOLED` only for migrations.',
+    ],
+  };
+}
+
 export function goBackend(config: GeneratorConfig): TemplateContribution {
-  if (config.database === 'postgres' || config.database === 'neon') {
+  if (config.database === 'neon') return goNeonBackend(config);
+  if (config.database === 'postgres') {
     return goPostgresBackend(config);
   }
 

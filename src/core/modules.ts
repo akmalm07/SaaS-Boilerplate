@@ -253,13 +253,17 @@ const modules: Record<string, GeneratorModule> = {
   docker: {
     id: 'docker',
     kind: 'deployment',
-    contribute: () => ({
+    contribute: (config) => ({
       files: {
         'compose.yaml':
-          "services:\n  postgres:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: app\n      POSTGRES_DB: app\n    ports: ['5432:5432']\n    healthcheck:\n      test: ['CMD-SHELL', 'pg_isready -U app']\n      interval: 5s\n      timeout: 3s\n      retries: 10\n",
+          config.backend === 'typescript'
+            ? "services:\n  postgres:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: app\n      POSTGRES_DB: app\n    healthcheck:\n      test: ['CMD-SHELL', 'pg_isready -U app']\n      interval: 5s\n      timeout: 3s\n      retries: 10\n  api:\n    build: ./backend\n    environment:\n      DATABASE_URL: postgres://app:app@postgres:5432/app\n      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}\n      JWT_ISSUER: ${JWT_ISSUER:-http://localhost:3000}\n      JWT_AUDIENCE: ${JWT_AUDIENCE:-web}\n      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}\n      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}\n      GCP_STORAGE_BUCKET: ${GCP_STORAGE_BUCKET:-}\n      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}\n      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}\n    depends_on:\n      postgres:\n        condition: service_healthy\n  frontend:\n    build: ./frontend\n    ports: ['8080:80']\n    depends_on: [api]\n"
+            : "services:\n  postgres:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: app\n      POSTGRES_DB: app\n    ports: ['5432:5432']\n    healthcheck:\n      test: ['CMD-SHELL', 'pg_isready -U app']\n      interval: 5s\n      timeout: 3s\n      retries: 10\n",
       },
       readmeSections: [
-        '## Docker\n\n`docker compose up postgres` starts the local PostgreSQL dependency with a health check.',
+        config.backend === 'typescript'
+          ? '## Docker\n\n`docker compose up --build` starts the API, React frontend, and local PostgreSQL dependency. Populate the selected provider variables in `.env` before starting it.'
+          : '## Docker\n\n`docker compose up postgres` starts the local PostgreSQL dependency with a health check.',
       ],
     }),
   },

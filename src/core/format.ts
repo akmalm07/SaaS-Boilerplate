@@ -5,6 +5,10 @@ import { format } from 'prettier';
 import type { GeneratorConfig } from './types.js';
 
 const run = promisify(execFile);
+const runNpm = (args: string[], cwd: string) =>
+  process.platform === 'win32'
+    ? run('cmd.exe', ['/d', '/s', '/c', `npm ${args.join(' ')}`], { cwd })
+    : run('npm', args, { cwd });
 const prettierExtensions = new Set([
   '.css',
   '.html',
@@ -32,6 +36,17 @@ export async function formatGeneratedProject(
   config: GeneratorConfig,
   files: Record<string, string>,
 ): Promise<void> {
+  if (config.backend === 'typescript') {
+    await Promise.all(
+      ['backend', 'frontend'].map((folder) =>
+        runNpm(
+          ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'],
+          join(directory, folder),
+        ),
+      ),
+    );
+    return;
+  }
   if (config.backend !== 'go') return;
 
   const goFiles = Object.keys(files)

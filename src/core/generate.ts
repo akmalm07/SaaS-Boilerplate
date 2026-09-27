@@ -97,7 +97,7 @@ export async function generateProject(
   const files: Record<string, string> = {
     '.gitignore': '.env\nnode_modules\ndist\nuploads\n',
     'saas.config.json': json(config),
-    'shared/openapi.yaml': openApi,
+    'shared/openapi.yaml': openApi(config),
   };
   const env = [...baseEnvironment];
   const sections: string[] = [];

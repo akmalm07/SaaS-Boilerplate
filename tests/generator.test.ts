@@ -56,18 +56,48 @@ describe('generator integration', () => {
     expect(repository).toContain('interface UserRepository');
     expect(repository).toContain('PostgresUserRepository');
   });
-  it('generates a PostgreSQL repository for Go + Neon instead of Firestore', async () => {
+  it('wires selected TypeScript providers and all optional features into executable starters', async () => {
+    const path = await generate({
+      database: 'neon',
+      storage: 'gcs',
+      email: 'twilio',
+      billing: true,
+      organizations: true,
+      docker: true,
+    });
+    const env = await readFile(join(path, '.env.example'), 'utf8');
+    const storage = await readFile(join(path, 'backend/src/providers/storage.ts'), 'utf8');
+    const server = await readFile(join(path, 'backend/src/server.ts'), 'utf8');
+    const migration = await readFile(join(path, 'backend/migrations/001_initial.sql'), 'utf8');
+    const contract = await readFile(join(path, 'shared/openapi.yaml'), 'utf8');
+    const compose = await readFile(join(path, 'compose.yaml'), 'utf8');
+
+    expect(env).toContain('TWILIO_ACCOUNT_SID');
+    expect(env).not.toContain('SMTP_HOST');
+    expect(storage).toContain('GoogleCloudStorage');
+    expect(server).toContain('registerStripeWebhook');
+    expect(server).toContain('registerOrganizationRoutes');
+    expect(migration).toContain('organization_members');
+    expect(migration).toContain('stripe_events');
+    expect(contract).toContain('/billing/webhook');
+    expect(contract).toContain('/organizations');
+    expect(compose).toContain('frontend:');
+    await expect(stat(join(path, 'backend/package-lock.json'))).resolves.toBeDefined();
+    await expect(stat(join(path, 'frontend/package-lock.json'))).resolves.toBeDefined();
+  });
+  it('generates a Neon-focused GORM repository without PostgreSQL or Firestore packages', async () => {
     const path = await generate({ backend: 'go', database: 'neon', storage: 'local' });
     const main = await readFile(join(path, 'backend/cmd/api/main.go'), 'utf8');
     const repository = await readFile(
-      join(path, 'backend/internal/database/postgresdb/user_repository.go'),
+      join(path, 'backend/internal/database/neondb/user_repository.go'),
       'utf8',
     );
     const environment = await readFile(join(path, '.env.example'), 'utf8');
 
-    expect(main).toContain('pgxpool.New');
+    expect(main).toContain('gorm.Open');
     expect(main).not.toContain('firestore.NewClient');
-    expect(repository).toContain('github.com/jackc/pgx/v5');
+    expect(main).not.toContain('postgresdb');
+    expect(repository).toContain('gorm.io/gorm');
     expect(environment).toContain('DATABASE_URL_UNPOOLED');
     expect(environment).not.toContain('FIREBASE_PROJECT_ID');
   });

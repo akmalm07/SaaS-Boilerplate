@@ -1,6 +1,8 @@
+import type { GeneratorConfig } from '../core/types.js';
+
 /** The generated application's public contract. Keep route implementations and
  * contract tests aligned with this document. */
-export const openApi = `openapi: 3.1.0
+const baseOpenApi = `openapi: 3.1.0
 info:
   title: Composable SaaS API
   version: 1.0.0
@@ -64,3 +66,30 @@ components:
     CreateFileInput: { type: object, required: [name, content], properties: { name: { type: string, minLength: 1 }, content: { type: string, contentEncoding: base64 } } }
     File: { type: object, required: [id, name, size, createdAt], properties: { id: { type: string }, name: { type: string }, size: { type: integer }, createdAt: { type: string, format: date-time } } }
 `;
+
+export function openApi(config: GeneratorConfig): string {
+  const optionalPaths = [
+    config.organizations
+      ? `  /organizations:
+    get:
+      operationId: listOrganizations
+      security: [{ sessionCookie: [] }]
+      responses: { '200': { description: Organizations }, '401': { $ref: '#/components/responses/Unauthorized' } }
+    post:
+      operationId: createOrganization
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1 } } } } } }
+      responses: { '201': { description: Organization created }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' } }`
+      : '',
+    config.billing
+      ? `  /billing/webhook:
+    post:
+      operationId: stripeWebhook
+      description: Stripe-signed event endpoint. It requires the raw JSON request body and a Stripe-Signature header.
+      responses: { '204': { description: Event accepted }, '400': { $ref: '#/components/responses/BadRequest' } }`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return baseOpenApi.replace('components:', `${optionalPaths}\ncomponents:`);
+}

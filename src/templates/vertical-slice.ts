@@ -9,6 +9,7 @@ function backendPackage(config: GeneratorConfig): string {
     scripts: {
       dev: 'tsx watch src/server.ts',
       start: 'tsx src/server.ts',
+      migrate: 'tsx src/migrate.ts',
       build: 'tsc --noEmit',
       test: 'vitest run',
     },
@@ -34,11 +35,27 @@ function backendPackage(config: GeneratorConfig): string {
   });
 }
 
-const configSource = `import 'dotenv/config';
-const required = ['DATABASE_URL', 'SESSION_SECRET', 'JWT_ISSUER', 'JWT_AUDIENCE', 'SMTP_HOST', 'EMAIL_FROM'] as const;
+function configSource(config: GeneratorConfig): string {
+  const required = [
+    'DATABASE_URL',
+    'SESSION_SECRET',
+    'JWT_ISSUER',
+    'JWT_AUDIENCE',
+    ...(config.storage === 'gcs' ? ['GCP_PROJECT_ID', 'GCP_STORAGE_BUCKET'] : []),
+    ...(config.billing ? ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'] : []),
+  ];
+  return `import 'dotenv/config';
+const required = ${JSON.stringify(required)} as const;
 for (const key of required) if (!process.env[key]) throw new Error('Missing required environment variable: ' + key);
-export const settings = { databaseUrl: process.env.DATABASE_URL!, sessionSecret: process.env.SESSION_SECRET!, jwtIssuer: process.env.JWT_ISSUER!, jwtAudience: process.env.JWT_AUDIENCE!, frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173', storagePath: process.env.LOCAL_STORAGE_PATH ?? './uploads', port: Number(process.env.PORT ?? 3000), production: process.env.NODE_ENV === 'production' };
+export const settings = {
+  databaseUrl: process.env.DATABASE_URL!, sessionSecret: process.env.SESSION_SECRET!, jwtIssuer: process.env.JWT_ISSUER!, jwtAudience: process.env.JWT_AUDIENCE!,
+  frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173', storagePath: process.env.LOCAL_STORAGE_PATH ?? './uploads',
+  gcpProjectId: process.env.GCP_PROJECT_ID, gcpStorageBucket: process.env.GCP_STORAGE_BUCKET,
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY, stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  port: Number(process.env.PORT ?? 3000), production: process.env.NODE_ENV === 'production',
+};
 `;
+}
 
 const domain = `export type Role = 'owner' | 'admin' | 'member';
 export type User = { id: string; email: string; name: string; passwordHash: string };
@@ -46,18 +63,31 @@ export type PublicUser = Pick<User, 'id' | 'email' | 'name'>;
 export type StoredFile = { id: string; userId: string; name: string; size: number; createdAt: string; path: string };
 `;
 
-const repositories = `import { Pool } from 'pg';
-import type { StoredFile, User } from '../domain/models.js';
+const repositories = `import { randomUUID } from 'node:crypto'; import { Pool } from 'pg';
+import type { Role, StoredFile, User } from '../domain/models.js';
 export interface UserRepository { findById(id: string): Promise<User | undefined>; findByEmail(email: string): Promise<User | undefined>; create(user: User): Promise<void>; delete(id: string): Promise<void>; }
 export interface FileRepository { list(userId: string): Promise<StoredFile[]>; create(file: StoredFile): Promise<void>; }
+export type Organization = { id: string; name: string; role: Role };
+export interface OrganizationRepository { listForUser(userId: string): Promise<Organization[]>; createWithOwner(userId: string, name: string): Promise<Organization>; }
 export class PostgresUserRepository implements UserRepository { constructor(private readonly pool: Pool) {} private map(row: Record<string, string>): User { return { id: row.id, email: row.email, name: row.name, passwordHash: row.password_hash }; } async findById(id: string) { const r = await this.pool.query('SELECT id,email,name,password_hash FROM users WHERE id=$1', [id]); return r.rows[0] ? this.map(r.rows[0]) : undefined; } async findByEmail(email: string) { const r = await this.pool.query('SELECT id,email,name,password_hash FROM users WHERE email=$1', [email]); return r.rows[0] ? this.map(r.rows[0]) : undefined; } async create(user: User) { await this.pool.query('INSERT INTO users (id,email,name,password_hash) VALUES ($1,$2,$3,$4)', [user.id, user.email, user.name, user.passwordHash]); } async delete(id: string) { await this.pool.query('DELETE FROM users WHERE id=$1', [id]); } }
 export class PostgresFileRepository implements FileRepository { constructor(private readonly pool: Pool) {} async list(userId: string) { const r = await this.pool.query('SELECT id,user_id,name,size,created_at,path FROM files WHERE user_id=$1 ORDER BY created_at DESC', [userId]); return r.rows.map(row => ({ id: row.id, userId: row.user_id, name: row.name, size: Number(row.size), createdAt: new Date(row.created_at).toISOString(), path: row.path })); } async create(file: StoredFile) { await this.pool.query('INSERT INTO files (id,user_id,name,size,created_at,path) VALUES ($1,$2,$3,$4,$5,$6)', [file.id,file.userId,file.name,file.size,file.createdAt,file.path]); } }
+export class PostgresOrganizationRepository implements OrganizationRepository { constructor(private readonly pool: Pool) {} async listForUser(userId: string) { const result = await this.pool.query('SELECT organizations.id, organizations.name, organization_members.role FROM organizations JOIN organization_members ON organization_members.organization_id=organizations.id WHERE organization_members.user_id=$1 ORDER BY organizations.created_at', [userId]); return result.rows as Organization[]; } async createWithOwner(userId: string, name: string) { const client = await this.pool.connect(); const organization = { id: randomUUID(), name, role: 'owner' as const }; try { await client.query('BEGIN'); await client.query('INSERT INTO organizations (id,name) VALUES ($1,$2)', [organization.id, organization.name]); await client.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'owner')", [organization.id, userId]); await client.query('COMMIT'); return organization; } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); } } }
 `;
 
-const storage = `import { mkdir, writeFile } from 'node:fs/promises'; import { basename, join } from 'node:path';
+const localStorage = `import { mkdir, writeFile } from 'node:fs/promises'; import { basename, join } from 'node:path';
 export interface Storage { put(userId: string, fileId: string, name: string, content: Buffer): Promise<string>; }
 export class LocalStorage implements Storage { constructor(private readonly root: string) {} async put(userId: string, fileId: string, name: string, content: Buffer) { const folder = join(this.root, userId); await mkdir(folder, { recursive: true }); const path = join(folder, fileId + '-' + basename(name)); await writeFile(path, content, { flag: 'wx' }); return path; } }
+export const createStorage = (settings: { storagePath: string }) => new LocalStorage(settings.storagePath);
 `;
+
+const gcsStorage = `import { Storage as GoogleCloudStorage } from '@google-cloud/storage'; import { posix } from 'node:path';
+export interface Storage { put(userId: string, fileId: string, name: string, content: Buffer): Promise<string>; }
+export class GcsStorage implements Storage { constructor(private readonly bucket: ReturnType<GoogleCloudStorage['bucket']>) {} async put(userId: string, fileId: string, name: string, content: Buffer) { const path = posix.join(userId, fileId + '-' + name.replaceAll('/', '_')); await this.bucket.file(path).save(content, { resumable: false, validation: 'crc32c' }); return path; } }
+export function createStorage(settings: { gcpProjectId?: string; gcpStorageBucket?: string }): Storage { if (!settings.gcpProjectId || !settings.gcpStorageBucket) throw new Error('GCP storage is not configured'); return new GcsStorage(new GoogleCloudStorage({ projectId: settings.gcpProjectId }).bucket(settings.gcpStorageBucket)); }
+`;
+
+const storageSource = (config: GeneratorConfig) =>
+  config.storage === 'gcs' ? gcsStorage : localStorage;
 
 const authService = `import { randomUUID } from 'node:crypto'; import bcrypt from 'bcryptjs'; import type { PublicUser, User } from '../domain/models.js'; import type { UserRepository } from '../repositories/user-repository.js';
 export class AppError extends Error { constructor(public readonly status: number, public readonly code: string, message: string) { super(message); } }
@@ -69,20 +99,55 @@ export const subject = (request: FastifyRequest) => (request.user as { sub?: str
 export async function requireUser(request: FastifyRequest, _reply: FastifyReply) { try { await request.jwtVerify(); if (!subject(request)) throw new Error('missing subject'); } catch { throw new AppError(401, 'UNAUTHORIZED', 'Authentication required.'); } }
 `;
 
+const twilioEmail = `export type EmailMessage = { to: string; subject: string; text: string };
+export class TwilioEmailSender { constructor(private readonly accountSid: string, private readonly authToken: string, private readonly from: string, private readonly fromName: string) {} async send(message: EmailMessage) { const response = await fetch('https://comms.twilio.com/v1/Emails', { method: 'POST', headers: { authorization: 'Basic ' + Buffer.from(this.accountSid + ':' + this.authToken).toString('base64'), 'content-type': 'application/json' }, body: JSON.stringify({ from: { email: this.from, name: this.fromName }, to: [{ email: message.to }], subject: message.subject, text: message.text }) }); if (!response.ok) throw new Error('Twilio Email request failed: ' + response.status); return response.headers.get('operation-location'); } }
+`;
+
 const routes = `import type { FastifyInstance } from 'fastify'; import { randomUUID } from 'node:crypto'; import type { FileRepository } from '../repositories/user-repository.js'; import type { Storage } from '../providers/storage.js'; import type { AuthService } from '../services/auth-service.js'; import { requireUser, subject } from '../middleware/auth.js'; import { AppError } from '../services/auth-service.js';
 const session = { httpOnly: true, sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', path: '/' };
 function issue(app: FastifyInstance, reply: any, id: string) { const token = (app.jwt as any).sign({ sub: id }, { expiresIn: '24h' }); reply.setCookie('session', token, { ...session, maxAge: 86400 }); }
 export function registerRoutes(app: FastifyInstance, auth: AuthService, files: FileRepository, storage: Storage) { app.get('/api/v1/health', async () => ({ status: 'ok' })); app.post('/api/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => { const user = await auth.register(request.body as any); issue(app, reply, user.id); return reply.code(201).send({ user }); }); app.post('/api/v1/auth/login', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => { const user = await auth.login(request.body as any); issue(app, reply, user.id); return { user }; }); app.post('/api/v1/auth/logout', async (_request, reply) => reply.clearCookie('session', { path: '/' }).code(204).send()); app.get('/api/v1/users/me', { preHandler: requireUser }, async request => auth.current(subject(request))); app.delete('/api/v1/users/me', { preHandler: requireUser }, async (request, reply) => { await auth.delete(subject(request)); return reply.clearCookie('session', { path: '/' }).code(204).send(); }); app.get('/api/v1/files', { preHandler: requireUser }, async request => ({ files: (await files.list(subject(request))).map(({ path: _path, userId: _userId, ...file }) => file) })); app.post('/api/v1/files', { preHandler: requireUser }, async (request, reply) => { const body = request.body as { name?: string; content?: string }; if (!body.name || !body.content) throw new AppError(400, 'VALIDATION_ERROR', 'name and base64 content are required.'); const content = Buffer.from(body.content, 'base64'); if (!content.length || content.length > 5 * 1024 * 1024) throw new AppError(400, 'VALIDATION_ERROR', 'File must be between 1 byte and 5 MB.'); const id = randomUUID(); const createdAt = new Date().toISOString(); const path = await storage.put(subject(request), id, body.name, content); await files.create({ id, userId: subject(request), name: body.name, size: content.length, createdAt, path }); return reply.code(201).send({ id, name: body.name, size: content.length, createdAt }); }); }
 `;
 
-const server = `import Fastify from 'fastify'; import cors from '@fastify/cors'; import cookie from '@fastify/cookie'; import helmet from '@fastify/helmet'; import jwt from '@fastify/jwt'; import rateLimit from '@fastify/rate-limit'; import { Pool } from 'pg'; import { settings } from './config/settings.js'; import { PostgresFileRepository, PostgresUserRepository } from './repositories/user-repository.js'; import { LocalStorage } from './providers/storage.js'; import { AuthService, AppError } from './services/auth-service.js'; import { registerRoutes } from './routes/routes.js';
-const app = Fastify({ logger: true }); const pool = new Pool({ connectionString: settings.databaseUrl, max: 10, idleTimeoutMillis: 30000 }); await app.register(cors, { origin: settings.frontendUrl, credentials: true }); await app.register(cookie); await app.register(helmet, { contentSecurityPolicy: false }); await app.register(rateLimit, { max: 100, timeWindow: '1 minute' }); await app.register(jwt, { secret: settings.sessionSecret, sign: { iss: settings.jwtIssuer, aud: settings.jwtAudience, algorithm: 'HS256' }, verify: { allowedIss: settings.jwtIssuer, allowedAud: settings.jwtAudience, algorithms: ['HS256'] } }); app.setErrorHandler((error, _request, reply) => { const known = error instanceof AppError ? error : undefined; reply.code(known?.status ?? 500).send({ error: known?.message ?? 'Internal server error.', code: known?.code ?? 'INTERNAL_ERROR' }); }); registerRoutes(app, new AuthService(new PostgresUserRepository(pool)), new PostgresFileRepository(pool), new LocalStorage(settings.storagePath)); await app.listen({ host: '0.0.0.0', port: settings.port });
+const stripeWebhook = `import type { FastifyInstance } from 'fastify'; import Stripe from 'stripe'; import { settings } from '../config/settings.js';
+export function registerStripeWebhook(app: FastifyInstance) { const stripe = new Stripe(settings.stripeSecretKey!); app.post('/api/v1/billing/webhook', async (request, reply) => { const signature = request.headers['stripe-signature']; if (typeof signature !== 'string' || !Buffer.isBuffer(request.body)) return reply.code(400).send({ error: 'Missing Stripe signature or raw body.', code: 'INVALID_WEBHOOK' }); try { const event = stripe.webhooks.constructEvent(request.body, signature, settings.stripeWebhookSecret!); // TODO: store event.id with a unique constraint before applying subscription changes.
+      request.log.info({ eventId: event.id, type: event.type }, 'Stripe event received'); return reply.code(204).send(); } catch { return reply.code(400).send({ error: 'Invalid Stripe webhook signature.', code: 'INVALID_WEBHOOK' }); } }); }
 `;
 
-const migration = `CREATE TABLE users (id UUID PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '', password_hash TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+const organizationRoutes = `import type { FastifyInstance } from 'fastify'; import type { OrganizationRepository } from '../repositories/user-repository.js'; import { requireUser, subject } from '../middleware/auth.js'; import { AppError } from '../services/auth-service.js';
+export function registerOrganizationRoutes(app: FastifyInstance, organizations: OrganizationRepository) { app.get('/api/v1/organizations', { preHandler: requireUser }, async request => ({ organizations: await organizations.listForUser(subject(request)) })); app.post('/api/v1/organizations', { preHandler: requireUser }, async (request, reply) => { const name = (request.body as { name?: string }).name?.trim(); if (!name) throw new AppError(400, 'VALIDATION_ERROR', 'Organization name is required.'); return reply.code(201).send({ organization: await organizations.createWithOwner(subject(request), name) }); }); }
+`;
+
+const migrationRunner = `import { readFile } from 'node:fs/promises'; import { join } from 'node:path'; import { Pool } from 'pg'; import { settings } from './config/settings.js';
+const pool = new Pool({ connectionString: settings.databaseUrl }); try { await pool.query(await readFile(join(import.meta.dirname, '../migrations/001_initial.sql'), 'utf8')); } finally { await pool.end(); }
+`;
+
+function serverSource(config: GeneratorConfig): string {
+  const billingImport = config.billing
+    ? "import { registerStripeWebhook } from './routes/stripe-webhook.js';"
+    : '';
+  const parser = config.billing
+    ? "app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => { if (request.url.startsWith('/api/v1/billing/webhook')) return done(null, body); try { done(null, JSON.parse(body.toString())); } catch (error) { done(error as Error); } });"
+    : '';
+  const billingRoutes = config.billing ? 'registerStripeWebhook(app);' : '';
+  const organizationImport = config.organizations
+    ? "import { registerOrganizationRoutes } from './routes/organizations.js';"
+    : '';
+  const organizationRoutes = config.organizations
+    ? 'registerOrganizationRoutes(app, new PostgresOrganizationRepository(pool));'
+    : '';
+  const organizationRepository = config.organizations ? ', PostgresOrganizationRepository' : '';
+  return `import Fastify from 'fastify'; import cors from '@fastify/cors'; import cookie from '@fastify/cookie'; import helmet from '@fastify/helmet'; import jwt from '@fastify/jwt'; import rateLimit from '@fastify/rate-limit'; import { Pool } from 'pg'; import { settings } from './config/settings.js'; import { PostgresFileRepository, PostgresUserRepository${organizationRepository} } from './repositories/user-repository.js'; import { createStorage } from './providers/storage.js'; import { AuthService, AppError } from './services/auth-service.js'; import { registerRoutes } from './routes/routes.js'; ${billingImport} ${organizationImport}
+const app = Fastify({ logger: true }); ${parser} const pool = new Pool({ connectionString: settings.databaseUrl, max: 10, idleTimeoutMillis: 30000 }); await app.register(cors, { origin: settings.frontendUrl, credentials: true }); await app.register(cookie); await app.register(helmet, { contentSecurityPolicy: false }); await app.register(rateLimit, { max: 100, timeWindow: '1 minute' }); await app.register(jwt, { secret: settings.sessionSecret, sign: { iss: settings.jwtIssuer, aud: settings.jwtAudience, algorithm: 'HS256' }, verify: { allowedIss: settings.jwtIssuer, allowedAud: settings.jwtAudience, algorithms: ['HS256'] } }); app.setErrorHandler((error, _request, reply) => { const known = error instanceof AppError ? error : undefined; reply.code(known?.status ?? 500).send({ error: known?.message ?? 'Internal server error.', code: known?.code ?? 'INTERNAL_ERROR' }); }); registerRoutes(app, new AuthService(new PostgresUserRepository(pool)), new PostgresFileRepository(pool), createStorage(settings)); ${billingRoutes} ${organizationRoutes} await app.listen({ host: '0.0.0.0', port: settings.port });
+`;
+}
+
+function migrationSource(config: GeneratorConfig): string {
+  return `CREATE TABLE users (id UUID PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '', password_hash TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE files (id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, size INTEGER NOT NULL CHECK (size >= 0), created_at TIMESTAMPTZ NOT NULL, path TEXT NOT NULL);
 CREATE INDEX files_user_id_created_at_idx ON files(user_id, created_at DESC);
-`;
+${config.organizations ? "CREATE TABLE organizations (id UUID PRIMARY KEY, name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());\nCREATE TABLE organization_members (organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK (role IN ('owner','admin','member')), PRIMARY KEY (organization_id, user_id));\n" : ''}${config.billing ? 'CREATE TABLE stripe_events (id TEXT PRIMARY KEY, type TEXT NOT NULL, received_at TIMESTAMPTZ NOT NULL DEFAULT now());\n' : ''}`;
+}
 
 const backendTest = `import { describe, expect, it } from 'vitest'; import { AuthService } from '../src/services/auth-service.js';
 const users = new Map<string, any>(); const repo = { findById: async (id: string) => users.get(id), findByEmail: async (email: string) => [...users.values()].find(user => user.email === email), create: async (user: any) => { users.set(user.id, user); }, delete: async (id: string) => { users.delete(id); } };
@@ -131,18 +196,22 @@ function typescriptBackendFiles(config: GeneratorConfig): Record<string, string>
       },
       include: ['src', 'test'],
     }),
-    'backend/src/config/settings.ts': configSource,
+    'backend/src/config/settings.ts': configSource(config),
     'backend/src/domain/models.ts': domain,
     'backend/src/repositories/user-repository.ts': repositories,
-    'backend/src/providers/storage.ts': storage,
+    'backend/src/providers/storage.ts': storageSource(config),
+    ...(config.email === 'twilio' ? { 'backend/src/providers/twilio-email.ts': twilioEmail } : {}),
     'backend/src/services/auth-service.ts': authService,
     'backend/src/middleware/auth.ts': authMiddleware,
     'backend/src/routes/routes.ts': routes,
-    'backend/src/server.ts': server,
-    'backend/migrations/001_initial.sql': migration,
+    'backend/src/server.ts': serverSource(config),
+    ...(config.billing ? { 'backend/src/routes/stripe-webhook.ts': stripeWebhook } : {}),
+    ...(config.organizations ? { 'backend/src/routes/organizations.ts': organizationRoutes } : {}),
+    'backend/src/migrate.ts': migrationRunner,
+    'backend/migrations/001_initial.sql': migrationSource(config),
     'backend/test/auth-service.test.ts': backendTest,
     'backend/Dockerfile':
-      'FROM node:22-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nENV NODE_ENV=production\nCMD ["npm", "run", "start"]\n',
+      'FROM node:22-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nENV NODE_ENV=production\nCMD ["sh", "-c", "npm run migrate && npm run start"]\n',
     ...(neon
       ? {
           'backend/neon.ts':
@@ -183,6 +252,8 @@ function reactFrontendFiles(config: GeneratorConfig): Record<string, string> {
       "export default { content: ['./index.html', './src/**/*.{ts,tsx}'], theme: { extend: {} }, plugins: [] };\n",
     'frontend/postcss.config.js':
       'export default { plugins: { tailwindcss: {}, autoprefixer: {} } };\n',
+    'frontend/Dockerfile':
+      'FROM node:22-alpine AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nRUN npm run build\nFROM nginx:1.27-alpine\nCOPY --from=build /app/dist /usr/share/nginx/html\nEXPOSE 80\n',
   };
 }
 
@@ -190,7 +261,7 @@ export function typescriptBackend(config: GeneratorConfig): TemplateContribution
   return {
     files: typescriptBackendFiles(config),
     readmeSections: [
-      `## Local development\n\nCopy \.env.example to \.env. Apply \`backend/migrations/001_initial.sql\` to PostgreSQL, then run \`npm install && npm run dev\` in \`backend\` and \`npm install && npm run dev\` in \`frontend\`. Local storage is development-only; it must be replaced by a cloud storage provider before serverless production deployment.`,
+      `## Local development\n\nCopy \.env.example to \.env. Apply \`backend/migrations/001_initial.sql\` to PostgreSQL, then run \`npm ci && npm run dev\` in \`backend\` and \`npm ci && npm run dev\` in \`frontend\`. ${config.storage === 'local' ? 'Local storage is development-only; replace it with a cloud storage provider before serverless production deployment.' : 'The generated storage provider uses its selected credentials at runtime.'}`,
       ...(config.database === 'neon'
         ? [
             "## Neon\n\nUse Neon's pooled \`DATABASE_URL\` as a managed secret. Apply the included PostgreSQL migration with your migration runner; the generated API creates one reusable pool per process and reused across requests.",
